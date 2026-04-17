@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import logging
 from typing import Any
 
+from cache import BaseQueryCacheStore, InMemoryQueryCacheStore
 from config.settings import Settings, get_settings
 from dialogue import BaseHistoryStore, InMemoryHistoryStore
 from integrations.chat_model_base import BaseChatModel
 from integrations.embedder_base import BaseEmbedder
 from query.prompt_builder import BasePromptBuilder, RetrievalPromptBuilder
 from vector_storage.vector_storage_base import BaseVectorStorage
+
+logger = logging.getLogger(__name__)
 
 # Явный ``score_threshold=None`` в вызове — без порога; пропуск параметра — из Settings.
 _UNSET = object()
@@ -42,6 +47,7 @@ class QueryPipeline:
         *,
         chat_model: BaseChatModel | None = None,
         history_store: BaseHistoryStore | None = None,
+        cache_store: BaseQueryCacheStore | None = None,
         prompt_builder: BasePromptBuilder | None = None,
         settings: Settings | None = None,
     ) -> None:
@@ -49,8 +55,13 @@ class QueryPipeline:
         self._storage = storage
         self._chat_model = chat_model
         self._history_store = history_store or InMemoryHistoryStore()
+        self._cache_store = cache_store or InMemoryQueryCacheStore()
         self._prompt_builder = prompt_builder or RetrievalPromptBuilder()
         self._settings = settings or get_settings()
+
+    @staticmethod
+    def _query_hash(query_text: str) -> str:
+        return hashlib.sha256(query_text.encode("utf-8")).hexdigest()
 
     def _ensure_chat_model(self) -> BaseChatModel:
         if self._chat_model is not None:
@@ -92,7 +103,15 @@ class QueryPipeline:
         Чтобы не применять порог score, передайте ``score_threshold=None`` явно.
         """
         text = query.strip()
+        logger.info(
+            "retrieve started: query_len=%d top_k=%s source=%s score_threshold=%s",
+            len(text),
+            top_k if top_k is not None else "default",
+            source or "all",
+            "default" if score_threshold is _UNSET else score_threshold,
+        )
         if not text:
+            logger.warning("retrieve skipped: empty query")
             return QueryResult(hits=[], query=query)
 
         k = self._settings.search_top_k if top_k is None else top_k
@@ -103,9 +122,11 @@ class QueryPipeline:
 
         vectors = self._embedder.embed([text])
         if len(vectors) != 1:
+            logger.error("retrieve failed: expected one embedding got=%d", len(vectors))
             raise ValueError(
                 f"Ожидался ровно один эмбеддинг для запроса, получено {len(vectors)}."
             )
+        logger.info("query embedding ready")
 
         hits = self._storage.search(
             vectors[0],
@@ -113,6 +134,7 @@ class QueryPipeline:
             source=source,
             score_threshold=st,
         )
+        logger.info("retrieve finished: hits=%d", len(hits))
         return QueryResult(hits=hits, query=query)
 
     def answer(
@@ -126,8 +148,25 @@ class QueryPipeline:
     ) -> QueryAnswerResult:
         """Выполнить retrieval и сгенерировать ответ LLM с учетом истории session_id."""
         text = query.strip()
+        logger.info("answer started: session_id=%s query_len=%d", session_id, len(text))
         if not text:
+            logger.warning("answer skipped: empty query session_id=%s", session_id)
             return QueryAnswerResult(query=query, answer="", hits=[], session_id=session_id)
+
+        query_hash = self._query_hash(text)
+        cached = self._cache_store.get(session_id, source, query_hash)
+        if cached is not None:
+            logger.info("cache hit: session_id=%s source=%s", session_id, source or "all")
+            self._history_store.append(session_id, "user", text)
+            self._history_store.append(session_id, "assistant", cached.answer)
+            logger.info("history updated from cache: session_id=%s added_messages=2", session_id)
+            return QueryAnswerResult(
+                query=query,
+                answer=cached.answer,
+                hits=[],
+                session_id=session_id,
+            )
+        logger.info("cache miss: session_id=%s source=%s", session_id, source or "all")
 
         retrieve_result = self.retrieve(
             text,
@@ -141,12 +180,31 @@ class QueryPipeline:
             history=self._get_history(session_id),
             system_prompt=self._settings.rag_system_prompt,
         )
+        logger.info(
+            "messages prepared: session_id=%s messages=%d hits=%d",
+            session_id,
+            len(messages),
+            len(retrieve_result.hits),
+        )
 
         response = self._ensure_chat_model().generate(messages)
         answer = self._as_text(response)
+        logger.info(
+            "answer generated: session_id=%s answer_len=%d",
+            session_id,
+            len(answer),
+        )
 
         self._history_store.append(session_id, "user", text)
         self._history_store.append(session_id, "assistant", answer)
+        logger.info("history updated: session_id=%s added_messages=2", session_id)
+        self._cache_store.set(
+            session_id,
+            source,
+            query_hash,
+            answer=answer,
+        )
+        logger.info("cache updated: session_id=%s source=%s", session_id, source or "all")
         return QueryAnswerResult(
             query=query,
             answer=answer,
@@ -157,3 +215,5 @@ class QueryPipeline:
     def clear_history(self, session_id: str) -> None:
         """Очистить историю сообщений для конкретной сессии."""
         self._history_store.clear(session_id)
+        self._cache_store.clear_session(session_id)
+        logger.info("history cleared: session_id=%s", session_id)

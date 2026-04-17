@@ -1,6 +1,6 @@
 ﻿# Support Assistant (MVP)
 
-Демо-проект **RAG-ассистента поддержки**: локальный **Qdrant**, эмбеддинги через **GigaChat API**, генерация ответов через **LangChain + GigaChat**, чанкинг текста, векторный поиск с фильтром по **источнику** и историей диалога в рамках CLI-сессии.
+Демо-проект **RAG-ассистента поддержки**: локальный **Qdrant**, эмбеддинги через **GigaChat API**, генерация ответов через **LangChain + GigaChat**, чанкинг текста, векторный поиск с фильтром по **источнику**, история диалога и L1-кэш запросов в рамках CLI-сессии.
 
 Цель репозитория — **портфолио / учебный MVP**: понятная архитектура, тесты, без клиентских данных и "закрытых" промптов под конкретного заказчика.
 
@@ -29,7 +29,8 @@
 - **Чанкинг** — отдельный слой: абстракция + реализации.
 - **Эмбеддинги** — отдельный слой: абстракция + реализация GigaChat.
 - **Чат-модель** — отдельный слой: абстракция + реализация GigaChat через LangChain.
-- **История диалога** — отдельный слой: абстракция + in-memory реализация.
+- **История диалога** — отдельный слой: абстракция + in-memory/json-file реализации.
+- **Кэш query-time** — отдельный слой: абстракция + in-memory/json-file реализации.
 - **Preprocessor** — отдельный слой ingestion для подготовки контента и metadata.
 - **Оркестрация** вынесена в пайплайны:
   - **`ingestion`** — текст -> preprocessor -> чанки -> эмбеддинги -> upsert (`IngestionPipeline`).
@@ -45,7 +46,8 @@
 | `BaseChatModel` | `integrations/chat_model_base.py` | `integrations/gigachat/chat_model.py` — `GigaChatLangChainChatModel` |
 | `BaseVectorStorage` | `vector_storage/vector_storage_base.py` | `vector_storage/qdrant/storage.py` — `QdrantVectorStorage` |
 | `BaseChunker` | `chunking/chunker_base.py` | `chunking/paragraph/`, `chunking/adaptive/` |
-| `BaseHistoryStore` | `dialogue/history_base.py` | `dialogue/inmemory/store.py` — `InMemoryHistoryStore` |
+| `BaseHistoryStore` | `dialogue/history_base.py` | `dialogue/inmemory/store.py` — `InMemoryHistoryStore`, `dialogue/json_file/store.py` — `JsonFileHistoryStore` |
+| `BaseQueryCacheStore` | `cache/cache_base.py` | `cache/inmemory/store.py` — `InMemoryQueryCacheStore`, `cache/json_file/store.py` — `JsonFileQueryCacheStore` |
 | `BasePreprocessor` | `ingestion/preprocessor_base.py` | `ingestion/preprocessors/title_preprocessor.py` — `TitlePreprocessor` |
 | `BasePromptBuilder` | `query/prompt_builder.py` | `query/prompt_builder.py` — `RetrievalPromptBuilder` |
 
@@ -98,8 +100,10 @@
 - Пустые строки для `qdrant_url`, `qdrant_path`, `gigachat_credentials` приводятся к **`None`**.
 - Поиск: `search_top_k`, `search_score_threshold`.
 - Генерация: `gigachat_chat_model`, `llm_temperature`, `llm_max_tokens`, `rag_system_prompt`.
-- История: `dialog_history_limit`.
+- История: `dialog_history_limit` (используется и для prompt-window, и для ротации storage в CLI).
+- Кэш: `cache_session_limit` (лимит L1-кэша на одну сессию).
 - CLI ingestion: `ingestion_data_dir` (по умолчанию `data`).
+- Логи: `log_level`, `log_format`.
 
 ### 10. Query-time (retrieve + answer)
 
@@ -107,10 +111,32 @@
   - эмбеддинг запроса,
   - поиск в Qdrant по `top_k`, опционально `source`, `score_threshold`.
 - `QueryPipeline.answer(...)`:
+  - L1 cache check по ключу `(session_id, source, sha256(query))`,
   - retrieve,
   - сборка сообщений через `RetrievalPromptBuilder`,
   - генерация через `BaseChatModel`,
-  - запись истории в `BaseHistoryStore`.
+  - запись истории в `BaseHistoryStore`,
+  - запись ответа в `BaseQueryCacheStore`.
+
+### 11. История и кэш в CLI MVP
+
+- CLI использует файловые реализации:
+  - `history_store.json` (история),
+  - `query_cache.json` (кэш).
+- История хранится по `session_id`; кэш — по составному ключу `session_id|source|sha256`.
+- На cache-hit LLM не вызывается, но история все равно пополняется (`user` + `assistant`), чтобы сохранять контекст диалога.
+- В кэше хранится только `answer` (без `hits`).
+- Реализована ротация:
+  - для истории — по `dialog_history_limit`,
+  - для кэша — по `cache_session_limit`.
+
+### 12. Логирование
+
+- Единая настройка через `config/logging_setup.py`.
+- Поддерживаются форматы:
+  - `text` (удобно для локального CLI),
+  - `json` (удобно для контейнерного/серверного окружения).
+- Ключевые runtime-события логируются в пайплайнах, Qdrant-storage, GigaChat-интеграциях и CLI.
 
 ---
 
@@ -173,10 +199,11 @@
 ```
 app/                     # CLI MVP
 config/                  # Settings, get_settings
+cache/                   # BaseQueryCacheStore + inmemory/json_file
 integrations/            # BaseEmbedder, BaseChatModel + gigachat/
 vector_storage/          # BaseVectorStorage + qdrant/
 chunking/                # BaseChunker, paragraph/, adaptive/
-dialogue/                # BaseHistoryStore + inmemory/
+dialogue/                # BaseHistoryStore + inmemory/json_file
 ingestion/               # IngestionPipeline + preprocessors/
 query/                   # QueryPipeline + prompt_builder
 tests/                   # Юнит-тесты + интеграция GigaChat
@@ -210,13 +237,16 @@ python run_cli.py
 - `source` — выбрать source-фильтр из списка (`all` + источники)
 - `stats`
 - `clearhistory`
+- `clearcache`
 - `exit`
 
 Если при старте коллекция пуста, CLI показывает предупреждение и подсказывает выполнить `ingest`.
 
 Вывод ответа включает:
 
+- `Вопрос: ...`
 - `Ответ: ...`
+- `Время ответа: ... ms`
 - `Источники` по каждому hit:
   - `chunk_id`
   - `similarity`
@@ -259,15 +289,16 @@ python -m pytest -m integration --override-ini=addopts=
 | Эмбеддинги | `EMBEDDING_VECTOR_SIZE`, `EMBEDDING_VECTOR_SIZE_FROM_API` |
 | Чанкинг | `CHUNK_SIZE`, `CHUNK_OVERLAP`, `CHUNK_MIN_SIZE` |
 | Поиск | `SEARCH_TOP_K`, `SEARCH_SCORE_THRESHOLD` |
-| История | `DIALOG_HISTORY_LIMIT` |
+| История и кэш | `DIALOG_HISTORY_LIMIT`, `CACHE_SESSION_LIMIT` |
+| Логирование | `LOG_LEVEL`, `LOG_FORMAT` |
 | CLI ingest | `INGESTION_DATA_DIR` |
 
 ---
 
 ## Дорожная карта
 
-- Кеш входящих запросов.
-- Метрики и логирование.
+- Рефактор orchestration-слоя query (выделение cache/history-политик в отдельный сервис/декоратор).
+- Персистентный backend-уровень (например, Postgres) для users/licenses/audit и следующих этапов продукта.
 - Поддержка preprocessors для HTML/PDF.
 - Затем виджет на сайте.
 

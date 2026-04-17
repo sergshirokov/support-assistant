@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_max_tokens: int | None = None
     dialog_history_limit: int = 10
+    cache_session_limit: int = 50
     rag_system_prompt: str = (
         "Ты помощник службы поддержки. Отвечай по контексту из базы знаний. "
         "Если контекста недостаточно, так и скажи."
@@ -50,6 +51,8 @@ class Settings(BaseSettings):
     search_top_k: int = 5
     #: Минимальный score для Qdrant; ``None`` — порог не задаётся.
     search_score_threshold: float | None = None
+    log_level: str = "INFO"
+    log_format: str = "text"
 
     @field_validator("qdrant_url", "qdrant_path", "gigachat_credentials", mode="before")
     @classmethod
@@ -78,6 +81,31 @@ class Settings(BaseSettings):
         if v < 0:
             raise ValueError("dialog_history_limit должен быть >= 0")
         return v
+
+    @field_validator("cache_session_limit")
+    @classmethod
+    def cache_session_limit_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("cache_session_limit должен быть >= 1")
+        return v
+
+    @field_validator("log_level")
+    @classmethod
+    def normalize_log_level(cls, v: str) -> str:
+        value = v.strip().upper()
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if value not in allowed:
+            raise ValueError(f"log_level должен быть одним из: {', '.join(sorted(allowed))}")
+        return value
+
+    @field_validator("log_format")
+    @classmethod
+    def normalize_log_format(cls, v: str) -> str:
+        value = v.strip().lower()
+        allowed = {"text", "json"}
+        if value not in allowed:
+            raise ValueError(f"log_format должен быть одним из: {', '.join(sorted(allowed))}")
+        return value
 
     @model_validator(mode="after")
     def chunk_limits_consistent(self) -> Settings:

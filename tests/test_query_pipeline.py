@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
+from cache import BaseQueryCacheStore, CacheEntry
 from config import get_settings
 from dialogue import BaseHistoryStore
 from integrations.chat_model_base import BaseChatModel
@@ -189,3 +190,62 @@ def test_answer_uses_custom_prompt_builder() -> None:
 
     prompt_builder.build_messages.assert_called_once()
     llm.generate.assert_called_once_with(["mock-message"])
+
+
+def test_answer_uses_cache_hit_without_retrieve() -> None:
+    embedder = create_autospec(BaseEmbedder, instance=True)
+    storage = create_autospec(BaseVectorStorage, instance=True)
+    llm = create_autospec(BaseChatModel, instance=True)
+    history_store = create_autospec(BaseHistoryStore, instance=True)
+    history_store.get.return_value = []
+
+    cache_store = create_autospec(BaseQueryCacheStore, instance=True)
+    cache_store.get.return_value = CacheEntry(
+        answer="cached answer",
+    )
+
+    pipeline = QueryPipeline(
+        embedder,
+        storage,
+        chat_model=llm,
+        history_store=history_store,
+        cache_store=cache_store,
+    )
+    out = pipeline.answer("Q", session_id="s1", source="faq")
+
+    assert out.answer == "cached answer"
+    assert out.hits == []
+    embedder.embed.assert_not_called()
+    storage.search.assert_not_called()
+    llm.generate.assert_not_called()
+    history_store.append.assert_any_call("s1", "user", "Q")
+    history_store.append.assert_any_call("s1", "assistant", "cached answer")
+
+
+def test_answer_cache_miss_then_set() -> None:
+    embedder = create_autospec(BaseEmbedder, instance=True)
+    embedder.embed.return_value = [[0.0, 0.0, 0.0, 0.0]]
+    storage = create_autospec(BaseVectorStorage, instance=True)
+    storage.search.return_value = [{"id": "1", "score": 0.9, "payload": {"text": "ctx"}}]
+
+    llm = create_autospec(BaseChatModel, instance=True)
+    llm_response = MagicMock()
+    llm_response.content = "A"
+    llm.generate.return_value = llm_response
+
+    cache_store = create_autospec(BaseQueryCacheStore, instance=True)
+    cache_store.get.return_value = None
+    history_store = create_autospec(BaseHistoryStore, instance=True)
+    history_store.get.return_value = []
+
+    pipeline = QueryPipeline(
+        embedder,
+        storage,
+        chat_model=llm,
+        history_store=history_store,
+        cache_store=cache_store,
+    )
+    pipeline.answer("Q", session_id="s1", source=None)
+
+    cache_store.get.assert_called_once()
+    cache_store.set.assert_called_once()

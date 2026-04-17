@@ -104,3 +104,11 @@ def test_dialog_history_limit_must_be_non_negative(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("DIALOG_HISTORY_LIMIT", "-1")
     with pytest.raises(ValueError, match="dialog_history_limit"):
         Settings()
+
+
+def test_cache_session_limit_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CACHE_SESSION_LIMIT", "0")
+    with pytest.raises(ValueError, match="cache_session_limit"):
+        Settings()
+
+

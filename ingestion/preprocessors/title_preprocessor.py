@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from ingestion.preprocessor_base import BasePreprocessor, PreprocessResult
+
+logger = logging.getLogger(__name__)
 
 
 class TitlePreprocessor(BasePreprocessor):
@@ -30,6 +33,14 @@ class TitlePreprocessor(BasePreprocessor):
 
         # Не индексируем заголовок отдельным чанком: оставляем только контентные абзацы.
         body_text = "\n\n".join(paragraphs[1:]) if len(paragraphs) > 1 else ""
+        if not body_text:
+            logger.warning("title preprocessor produced empty body: source=%s file=%s", title, file_name)
+        logger.info(
+            "title preprocessor finished: source=%s paragraphs=%d body_len=%d",
+            title,
+            len(paragraphs),
+            len(body_text),
+        )
         return PreprocessResult(text=body_text, source=title, extra_payload=payload)
 
     @staticmethod

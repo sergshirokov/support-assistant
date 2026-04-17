@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Sequence
 
 from config import get_settings
 from config.settings import Settings
 from integrations.chat_model_base import BaseChatModel
+
+logger = logging.getLogger(__name__)
 
 
 class GigaChatLangChainChatModel(BaseChatModel):
@@ -25,12 +28,19 @@ class GigaChatLangChainChatModel(BaseChatModel):
 
         creds = self._settings.gigachat_credentials
         if not creds:
+            logger.error("gigachat chat model init failed: credentials are missing")
             raise ValueError(
                 "Не задан gigachat_credentials в окружении или .env — нужен ключ авторизации GigaChat."
             )
 
         from langchain_gigachat.chat_models import GigaChat
 
+        logger.info(
+            "gigachat chat client initialized: model=%s temperature=%s max_tokens=%s",
+            self._settings.gigachat_chat_model,
+            self._settings.llm_temperature,
+            self._settings.llm_max_tokens,
+        )
         return GigaChat(
             credentials=creds,
             scope=self._settings.gigachat_scope,
@@ -42,5 +52,8 @@ class GigaChatLangChainChatModel(BaseChatModel):
         )
 
     def generate(self, messages: Sequence[Any]) -> Any:
+        logger.info("chat generation started: messages=%d", len(messages))
         client = self._get_client()
-        return client.invoke(list(messages))
+        response = client.invoke(list(messages))
+        logger.info("chat generation finished")
+        return response
