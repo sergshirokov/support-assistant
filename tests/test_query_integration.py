@@ -11,7 +11,7 @@ import pytest
 
 from chunking.paragraph.chunker import ParagraphChunker
 from config import get_settings
-from integrations.gigachat.embedder import GigaChatEmbedder
+from integrations.gigachat import GigaChatEmbedder, GigaChatLangChainChatModel
 from ingestion import IngestionPipeline
 from query import QueryPipeline
 from vector_storage import QdrantVectorStorage
@@ -25,7 +25,7 @@ def clear_settings_cache() -> None:
 
 
 @pytest.mark.integration
-def test_ingest_then_retrieve_same_source(tmp_path) -> None:
+def test_ingest_then_answer_with_history(tmp_path) -> None:
     settings = get_settings()
     if not settings.gigachat_credentials:
         pytest.skip("Задайте GIGACHAT_CREDENTIALS в .env или окружении")
@@ -35,18 +35,25 @@ def test_ingest_then_retrieve_same_source(tmp_path) -> None:
         embedder.embed(["warmup"])
 
     storage = QdrantVectorStorage(
-        collection_name="query_integration",
+        collection_name="query_answer_integration",
         vector_size=embedder.vector_size,
         path=str(tmp_path / "qdrant_data"),
     )
     ingest = IngestionPipeline(ParagraphChunker(), embedder, storage)
-    retrieve = QueryPipeline(embedder, storage)
+    chat_model = GigaChatLangChainChatModel(settings=settings)
+    query_pipeline = QueryPipeline(embedder, storage, chat_model=chat_model, settings=settings)
 
-    body = "Ответ на вопрос о погоде: солнечно.\n\nВторой блок про дождь."
-    source = "docs/weather.md"
-    ingest.ingest(body, source=source)
+    body = (
+        "Чтобы сбросить пароль, откройте страницу входа и нажмите 'Забыли пароль'.\n\n"
+        "Письмо с инструкцией придет на зарегистрированный email."
+    )
+    ingest.ingest(body, source="docs/auth.md")
 
-    result = retrieve.retrieve("погода солнечно", source=source)
-    assert result.hits
-    texts = {h["payload"].get("text", "") for h in result.hits}
-    assert any("погода" in t or "солнечно" in t for t in texts)
+    retrieved = query_pipeline.retrieve("сбросить пароль", source="docs/auth.md")
+    first = query_pipeline.answer("Как сбросить пароль?", session_id="demo", source="docs/auth.md")
+    second = query_pipeline.answer("Куда придет инструкция?", session_id="demo", source="docs/auth.md")
+
+    assert retrieved.hits
+    assert first.hits
+    assert isinstance(first.answer, str) and first.answer.strip()
+    assert isinstance(second.answer, str) and second.answer.strip()

@@ -6,6 +6,7 @@ from uuid import uuid4
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
+    FilterSelector,
     FieldCondition,
     Filter,
     MatchValue,
@@ -125,3 +126,33 @@ class QdrantVectorStorage(BaseVectorStorage):
             }
             for p in hits
         ]
+
+    def clear(self) -> None:
+        self._client.delete(
+            collection_name=self._collection_name,
+            points_selector=FilterSelector(filter=Filter()),
+            wait=True,
+        )
+
+    def list_sources(self) -> list[str]:
+        points, _ = self._client.scroll(
+            collection_name=self._collection_name,
+            scroll_filter=None,
+            with_vectors=False,
+            with_payload=True,
+            limit=10_000,
+        )
+        values = {
+            str(p.payload.get("source"))
+            for p in points
+            if p.payload is not None and p.payload.get("source") is not None
+        }
+        return sorted(values)
+
+    def count_embeddings(self) -> int:
+        result = self._client.count(
+            collection_name=self._collection_name,
+            count_filter=None,
+            exact=True,
+        )
+        return int(result.count)

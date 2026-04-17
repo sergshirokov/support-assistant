@@ -30,12 +30,21 @@ class Settings(BaseSettings):
     gigachat_credentials: str | None = None
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_embedding_model: str = "Embeddings"
+    gigachat_chat_model: str = "GigaChat-2-Max"
     gigachat_verify_ssl_certs: bool = True
     gigachat_timeout: float = 60.0
+    llm_temperature: float = 0.2
+    llm_max_tokens: int | None = None
+    dialog_history_limit: int = 10
+    rag_system_prompt: str = (
+        "Ты помощник службы поддержки. Отвечай по контексту из базы знаний. "
+        "Если контекста недостаточно, так и скажи."
+    )
 
     chunk_size: int = 500
     chunk_overlap: int = 100
     chunk_min_size: int = 50
+    ingestion_data_dir: str = "data"
 
     #: Число ближайших соседей при векторном поиске (RAG retrieval).
     search_top_k: int = 5
@@ -61,6 +70,13 @@ class Settings(BaseSettings):
     def search_top_k_positive(cls, v: int) -> int:
         if v < 1:
             raise ValueError("search_top_k должен быть >= 1")
+        return v
+
+    @field_validator("dialog_history_limit")
+    @classmethod
+    def dialog_history_limit_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("dialog_history_limit должен быть >= 0")
         return v
 
     @model_validator(mode="after")

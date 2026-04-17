@@ -43,3 +43,15 @@ class BaseVectorStorage(ABC):
 
         Элемент результата: ``{"id", "score", "payload"}`` — общий контракт для вызывающего кода.
         """
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Очистить все точки текущей коллекции (сама коллекция сохраняется)."""
+
+    @abstractmethod
+    def list_sources(self) -> list[str]:
+        """Получить уникальные значения ``payload['source']`` в коллекции."""
+
+    @abstractmethod
+    def count_embeddings(self) -> int:
+        """Получить общее число векторов (embeddings) в текущей коллекции."""

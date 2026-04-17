@@ -5,6 +5,7 @@ from typing import Any
 
 from chunking.chunker_base import BaseChunker
 from integrations.embedder_base import BaseEmbedder
+from ingestion.preprocessor_base import BasePreprocessor, PassThroughPreprocessor
 from vector_storage.vector_storage_base import BaseVectorStorage
 
 
@@ -24,20 +25,29 @@ class IngestionPipeline:
         chunker: BaseChunker,
         embedder: BaseEmbedder,
         storage: BaseVectorStorage,
+        *,
+        preprocessor: BasePreprocessor | None = None,
     ) -> None:
         self._chunker = chunker
         self._embedder = embedder
         self._storage = storage
+        self._preprocessor = preprocessor or PassThroughPreprocessor()
 
     def ingest(
         self,
         text: str,
-        source: str,
+        source: str | None = None,
         *,
         extra_payload: dict[str, Any] | None = None,
     ) -> IngestionResult:
         """Разбить ``text`` на чанки, получить векторы и записать точки с ``payload['source']``."""
-        chunks = self._chunker.chunk(text)
+        prepared = self._preprocessor.preprocess(
+            text,
+            source=source,
+            extra_payload=extra_payload,
+        )
+
+        chunks = self._chunker.chunk(prepared.text)
         if not chunks:
             return IngestionResult(point_ids=[], chunks=[])
 
@@ -47,11 +57,11 @@ class IngestionPipeline:
                 f"Число эмбеддингов ({len(vectors)}) не совпадает с числом чанков ({len(chunks)})."
             )
 
-        extra = dict(extra_payload) if extra_payload else {}
+        extra = prepared.extra_payload
         payloads: list[dict[str, Any]] = []
         for i, chunk in enumerate(chunks):
             pl: dict[str, Any] = {
-                "source": source,
+                "source": prepared.source,
                 "text": chunk,
                 "chunk_index": i,
             }

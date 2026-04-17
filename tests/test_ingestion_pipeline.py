@@ -6,7 +6,7 @@ import pytest
 
 from chunking.chunker_base import BaseChunker
 from integrations.embedder_base import BaseEmbedder
-from ingestion import IngestionPipeline, IngestionResult
+from ingestion import BasePreprocessor, IngestionPipeline, IngestionResult, PreprocessResult
 from vector_storage.vector_storage_base import BaseVectorStorage
 
 
@@ -89,3 +89,37 @@ def test_ingest_raises_when_embedding_count_mismatch() -> None:
         pipeline.ingest("x", source="s")
 
     storage.upsert.assert_not_called()
+
+
+def test_ingest_calls_preprocessor_and_uses_preprocessed_source() -> None:
+    chunker = MagicMock()
+    chunker.chunk.return_value = ["c1"]
+    embedder = MagicMock()
+    embedder.embed.return_value = [[0.1, 0.2, 0.3, 0.4]]
+    storage = MagicMock()
+    storage.upsert.return_value = ["id"]
+
+    preprocessor = create_autospec(BasePreprocessor, instance=True)
+    preprocessor.preprocess.return_value = PreprocessResult(
+        text="content only",
+        source="doc title",
+        extra_payload={"file_name": "doc1.txt"},
+    )
+
+    pipeline = IngestionPipeline(
+        chunker,
+        embedder,
+        storage,
+        preprocessor=preprocessor,
+    )
+    pipeline.ingest("body", source=None)
+
+    preprocessor.preprocess.assert_called_once_with(
+        "body",
+        source=None,
+        extra_payload=None,
+    )
+    chunker.chunk.assert_called_once_with("content only")
+    payloads = storage.upsert.call_args[0][1]
+    assert payloads[0]["source"] == "doc title"
+    assert payloads[0]["file_name"] == "doc1.txt"

@@ -127,3 +127,26 @@ def test_qdrant_storage_is_base_vector_storage(tmp_path) -> None:
     storage = _storage(tmp_path)
     assert isinstance(storage, BaseVectorStorage)
     assert storage.vector_size == 4
+
+
+def test_list_sources_returns_unique_sorted_values(tmp_path) -> None:
+    storage = _storage(tmp_path)
+    storage.upsert(
+        [[1.0, 0.0, 0.0, 0.0], [0.9, 0.1, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+        [{"source": "beta"}, {"source": "alpha"}, {"source": "beta"}],
+    )
+    assert storage.list_sources() == ["alpha", "beta"]
+
+
+def test_clear_removes_all_points(tmp_path) -> None:
+    storage = _storage(tmp_path)
+    storage.upsert(
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+        [{"source": "s"}, {"source": "s"}],
+    )
+    assert storage.count_embeddings() == 2
+    assert len(storage.search([1.0, 0.0, 0.0, 0.0], top_k=10)) == 2
+
+    storage.clear()
+    assert storage.count_embeddings() == 0
+    assert storage.search([1.0, 0.0, 0.0, 0.0], top_k=10) == []

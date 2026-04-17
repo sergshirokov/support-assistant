@@ -98,3 +98,9 @@ def test_search_top_k_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEARCH_TOP_K", "0")
     with pytest.raises(ValueError, match="search_top_k"):
         Settings()
+
+
+def test_dialog_history_limit_must_be_non_negative(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIALOG_HISTORY_LIMIT", "-1")
+    with pytest.raises(ValueError, match="dialog_history_limit"):
+        Settings()

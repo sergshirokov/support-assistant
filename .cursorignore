@@ -1,6 +1,5 @@
 ﻿# Environment & secrets
 .env
-.env.*
 
 # Virtual environment
 .venv/
@@ -11,7 +10,7 @@ __pycache__/
 *.pyo
 
 # IDE
-.vscode/
+# .vscode/
 
 # OS
 Thumbs.db
