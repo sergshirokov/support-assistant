@@ -54,6 +54,15 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "Eval: run_eval.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_eval.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ]
 }

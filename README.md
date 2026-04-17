@@ -206,12 +206,15 @@ chunking/                # BaseChunker, paragraph/, adaptive/
 dialogue/                # BaseHistoryStore + inmemory/json_file
 ingestion/               # IngestionPipeline + preprocessors/
 query/                   # QueryPipeline + prompt_builder
+eval/                    # JSON-датасет для офлайн-прогона (см. run_eval.py)
 tests/                   # Юнит-тесты + интеграция GigaChat
 pytest.ini               # addopts = -m "not integration"
 .env.example             # Шаблон переменных (без секретов)
 requirements.txt
-.vscode/                 # debug configs (pytest + CLI)
+.vscode/                 # debug configs (pytest + CLI + run_eval)
 run_cli.py               # тонкий запуск CLI из корня
+run_eval.py              # офлайн evaluation → artifacts/eval/eval_<UTC>.json
+artifacts/eval/          # JSON-артефакты run_eval (см. раздел ниже)
 ```
 
 **`pytest.ini`** коммитится: `pythonpath`, `testpaths`, маркеры, **`addopts = -m "not integration"`**.  
@@ -256,6 +259,34 @@ python run_cli.py
 
 ---
 
+## Офлайн evaluation (`run_eval.py`)
+
+Скрипт в корне репозитория прогоняет **полную** RAG-цепочку (`QueryPipeline`: эмбеддинг запроса + Qdrant + GigaChat) по **статическому датасету** и пишет итог в **`artifacts/eval/eval_<UTC>.json`**. Нужна **уже проиндексированная** коллекция (как после `ingest` в CLI). Для eval поднимается **in-memory** история и L1-кэш: файлы `history_store.json` и `query_cache.json` **не** используются; на каждый кейс свой `session_id` вида `eval-<id>`.
+
+**Датасет по умолчанию:** `eval/eval_dataset.json` — JSON-массив объектов, у каждого обязательны поля:
+
+| Поле | Смысл |
+|------|--------|
+| `id` | Строковый идентификатор кейса |
+| `question` | Текст запроса к RAG |
+| `reference_answer` | Опорный ответ (для ручной/будущей автоматической оценки) |
+| `tags` | Массив тегов (например, `single_hop`, `out_of_domain`) |
+
+**Артефакт** содержит `meta` (датасет, путь вывода, коллекция, `search_top_k`, порог, фильтр `source`, число точек в индексе, счётчики кейсов) и `results` по каждому кейсу: `answer`, `hits`, `latency_ms`, `hits_count`, при ошибке — `error`.
+
+**Запуск (после `ingest` и настроенного `.env`):**
+
+```bash
+python run_eval.py
+# опции: --dataset, --output-dir, --source, --allow-empty-index
+```
+
+**Почему в MVP нет RAGAS на GigaChat:** в RAGAS 0.4 метрики опираются на **Instructor** и **structured output** (сложные JSON-схемы, цепочки вызовов). Через **LiteLLM** к **GigaChat** это нестабильно: у API жёсткая валидация тела запроса, часто **HTTP 422** на function/JSON-формате и многошаговых сценариях, поэтому связка **RAGAS + GigaChat** в проекте **не** поддерживается.
+
+**Дальнейшая доработка — автоматические метрики** вроде **faithfulness**, **answer relevancy**, **answer correctness**: практичный путь — **RAGAS с LLM-провайдером OpenAI** (или иным провайдером со стабильным structured output), либо одна из альтернатив с гибкой подстановкой моделей: **DeepEval**, **promptfoo**, **Giskard**, **Arize Phoenix**, **TruLens** — в зависимости от того, нужны ли pytest-интеграция, YAML/CI-прогоны, или оценки поверх трейсов.
+
+---
+
 ## Запуск тестов
 
 ```bash
@@ -274,6 +305,7 @@ python -m pytest -m integration --override-ini=addopts=
 - `Pytest: integration only`
 - `CLI MVP (module)`
 - `CLI MVP (run_cli.py)`
+- `Eval: run_eval.py`
 
 ---
 
@@ -301,6 +333,17 @@ python -m pytest -m integration --override-ini=addopts=
 - Персистентный backend-уровень (например, Postgres) для users/licenses/audit и следующих этапов продукта.
 - Поддержка preprocessors для HTML/PDF.
 - Затем виджет на сайте.
+
+### Ближайшие улучшения RAG (CLI MVP)
+
+- Идемпотентность ingestion: защита от повторной индексации одного и того же документа.
+- Инвалидация кэша при изменении базы знаний/настроек retrieval и генерации.
+- Guardrails для контекста: базовая защита от prompt-injection в документах.
+- Явный fallback-режим, когда релевантный контекст не найден (минимизация галлюцинаций).
+- Улучшение retrieval quality: настройка порогов, `top_k`, опциональный rerank.
+- Расширение evaluation: поверх уже имеющегося офлайн-прогона (`run_eval.py`, `eval/eval_dataset.json`) добавить автоматический расчёт **faithfulness**, **answer relevancy**, **answer correctness** — через **RAGAS + OpenAI** (или другой провайдер со стабильным structured output), либо через **DeepEval**, **promptfoo**, **Giskard**, **Arize Phoenix**, **TruLens** (см. раздел «Офлайн evaluation»).
+- Повышение устойчивости интеграций: retry/backoff/timeout и понятные сообщения об ошибках.
+- Версионирование индекса/знаний для аудита и воспроизводимости ответов.
 
 ---
 

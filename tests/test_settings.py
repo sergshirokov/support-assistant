@@ -111,4 +111,3 @@ def test_cache_session_limit_must_be_positive(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(ValueError, match="cache_session_limit"):
         Settings()
 
-
